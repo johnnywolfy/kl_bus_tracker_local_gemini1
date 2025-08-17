@@ -56,6 +56,8 @@ class _TrackingScreenState extends State<TrackingScreen> {
   GtfsData? _gtfsData;
   List<GtfsRoute> _filteredRoutes = [];
   GtfsRoute? _selectedRoute;
+  // **FIX:** Store the trip IDs for the selected route for more reliable matching.
+  Set<String> _selectedRouteTripIds = {};
   final Set<Marker> _busMarkers = {};
 
   @override
@@ -120,7 +122,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   Future<void> _fetchStaticData() async {
     try {
       final data = await _gtfsStaticService.fetchGtfsData();
-
+      
       // --- Add this block for debugging ---
       print('--- AVAILABLE BUS ROUTES ---');
       // Sort routes alphabetically by their short name for easier reading
@@ -163,8 +165,17 @@ class _TrackingScreenState extends State<TrackingScreen> {
 
   // Handle when a user selects a route from the search results
   void _onRouteSelected(GtfsRoute route) {
+    if (_gtfsData == null) return;
+
+    // **FIX:** Find all trip IDs associated with the selected route.
+    final tripIds = _gtfsData!.trips
+        .where((trip) => trip.routeId == route.routeId)
+        .map((trip) => trip.tripId)
+        .toSet();
+
     setState(() {
       _selectedRoute = route;
+      _selectedRouteTripIds = tripIds;
       _filteredRoutes = []; // Hide search results
       _busMarkers.clear(); // Clear old markers
     });
@@ -187,8 +198,10 @@ class _TrackingScreenState extends State<TrackingScreen> {
     try {
       final vehiclePositions = await _gtfsRealtimeService.fetchVehiclePositions();
       
-      // Filter for vehicles on the selected route
-      final vehiclesForRoute = vehiclePositions.where((v) => v.routeId == _selectedRoute!.routeId).toList();
+      // **FIX:** Filter vehicles by checking if their tripId is in our set of valid trip IDs.
+      final vehiclesForRoute = vehiclePositions
+          .where((v) => _selectedRouteTripIds.contains(v.tripId))
+          .toList();
       
       final newMarkers = <Marker>{};
       for (final vehicle in vehiclesForRoute) {
