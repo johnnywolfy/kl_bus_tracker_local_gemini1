@@ -19,37 +19,51 @@ class GtfsData {
 }
 
 class GtfsStaticService {
-  // The official API endpoint for RapidKL and GoKL static data.
-  static const String _staticGtfsUrl =
-      'https://api.data.gov.my/gtfs-static/prasarana?category=rapid-bus-kl';
+  // **MODIFIED:** A list of all static data endpoints we need to fetch.
+  static const List<String> _staticGtfsUrls = [
+    'https://api.data.gov.my/gtfs-static/prasarana?category=rapid-bus-kl',
+    'https://api.data.gov.my/gtfs-static/prasarana?category=rapid-bus-mrtfeeder',
+  ];
 
-  // Fetches, unzips, and parses the GTFS static data.
+  // Fetches, unzips, and parses the GTFS static data from all sources.
   Future<GtfsData> fetchGtfsData() async {
-    try {
-      print('Fetching GTFS static data from $_staticGtfsUrl...');
-      final response = await http.get(Uri.parse(_staticGtfsUrl));
+    // Use Future.wait to fetch all URLs in parallel for better performance.
+    final responses = await Future.wait(
+        _staticGtfsUrls.map((url) => http.get(Uri.parse(url))));
 
+    final allRoutes = <GtfsRoute>[];
+    final allTrips = <GtfsTrip>[];
+    // Use a Map for stops to automatically handle duplicates across files.
+    final allStops = <String, GtfsStop>{};
+
+    for (final response in responses) {
       if (response.statusCode == 200) {
         print('Download complete. Unzipping and parsing...');
-        // Use the 'archive' package to decode the zip file from the response bytes.
         final archive = ZipDecoder().decodeBytes(response.bodyBytes);
 
-        // Parse each required file from the archive.
-        final routes = _parseCsvFile(archive, 'routes.txt', (row) => GtfsRoute.fromCsv(row));
-        final stops = _parseCsvFile(archive, 'stops.txt', (row) => GtfsStop.fromCsv(row));
-        final trips = _parseCsvFile(archive, 'trips.txt', (row) => GtfsTrip.fromCsv(row));
-
-        print('Parsing complete!');
-        return GtfsData(routes: routes, stops: stops, trips: trips);
+        // Parse each file and add its contents to our combined lists.
+        allRoutes.addAll(_parseCsvFile(
+            archive, 'routes.txt', (row) => GtfsRoute.fromCsv(row)));
+        allTrips.addAll(
+            _parseCsvFile(archive, 'trips.txt', (row) => GtfsTrip.fromCsv(row)));
+        
+        final stops = _parseCsvFile(
+            archive, 'stops.txt', (row) => GtfsStop.fromCsv(row));
+        for (final stop in stops) {
+          allStops[stop.stopId] = stop;
+        }
       } else {
-        // Handle server errors.
-        throw Exception('Failed to load GTFS data: Status code ${response.statusCode}');
+        throw Exception(
+            'Failed to load GTFS data: Status code ${response.statusCode} from ${response.request?.url}');
       }
-    } catch (e) {
-      // Handle network or other errors.
-      print('An error occurred in fetchGtfsData: $e');
-      rethrow;
     }
+
+    print('All static data parsing complete!');
+    return GtfsData(
+      routes: allRoutes,
+      stops: allStops.values.toList(), // Convert the map values back to a list.
+      trips: allTrips,
+    );
   }
 
   // A generic helper function to find a file in the archive, decode it,
@@ -58,7 +72,8 @@ class GtfsStaticService {
       Archive archive, String fileName, T Function(List<String>) fromCsv) {
     final file = archive.findFile(fileName);
     if (file == null) {
-      throw Exception('$fileName not found in the archive.');
+      print('Warning: $fileName not found in an archive. Skipping.');
+      return []; // Return an empty list if a file (like shapes.txt) is missing.
     }
 
     // Decode the file content from UTF-8.
@@ -71,8 +86,6 @@ class GtfsStaticService {
       final line = lines[i].trim();
       if (line.isNotEmpty) {
         // Simple CSV parsing by splitting on commas.
-        // Note: This is a basic implementation and might fail on complex CSVs with quoted commas.
-        // For this GTFS data, it's sufficient.
         final values = line.split(',');
         results.add(fromCsv(values));
       }

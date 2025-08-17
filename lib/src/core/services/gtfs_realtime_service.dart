@@ -2,55 +2,53 @@
 
 import 'package:http/http.dart' as http;
 import '../models/gtfs_models.dart';
-// **FIX:** Import the generated Dart code with a prefix 'pb' to avoid name conflicts.
 import 'generated/gtfs-realtime.pb.dart' as pb;
 
 class GtfsRealtimeService {
-  // The official API endpoint for RapidKL and GoKL realtime data.
-  static const String _realtimeGtfsUrl =
-      'https://api.data.gov.my/gtfs-realtime/vehicle-position/prasarana?category=rapid-bus-kl';
+  // **MODIFIED:** A list of all realtime data endpoints.
+  static const List<String> _realtimeGtfsUrls = [
+    'https://api.data.gov.my/gtfs-realtime/vehicle-position/prasarana?category=rapid-bus-kl',
+    'https://api.data.gov.my/gtfs-realtime/vehicle-position/prasarana?category=rapid-bus-mrtfeeder',
+  ];
 
-  // Fetches and parses the GTFS-Realtime vehicle positions.
+  // Fetches and parses the GTFS-Realtime vehicle positions from all sources.
   Future<List<VehiclePosition>> fetchVehiclePositions() async {
-    try {
-      print('Fetching GTFS-Realtime data from $_realtimeGtfsUrl...');
-      final response = await http.get(Uri.parse(_realtimeGtfsUrl));
+    // Fetch all URLs in parallel.
+    final responses = await Future.wait(
+        _realtimeGtfsUrls.map((url) => http.get(Uri.parse(url))));
 
+    final allVehiclePositions = <VehiclePosition>[];
+
+    for (final response in responses) {
       if (response.statusCode == 200) {
-        // The response body is a binary buffer.
-        // **FIX:** Use the prefixed 'pb.FeedMessage' class to parse it.
         final feed = pb.FeedMessage.fromBuffer(response.bodyBytes);
 
-        final List<VehiclePosition> vehiclePositions = [];
-
-        // Iterate through each 'entity' in the feed.
         for (final entity in feed.entity) {
-          // We only care about entities that have vehicle position data.
           if (entity.hasVehicle()) {
             final vehicle = entity.vehicle;
-            // **FIX:** Create an instance of our *custom* VehiclePosition model,
-            // not the one from the generated file. This resolves the function call error.
-            vehiclePositions.add(
+            allVehiclePositions.add(
               VehiclePosition(
                 vehicleId: vehicle.vehicle.id,
                 tripId: vehicle.trip.tripId,
                 routeId: vehicle.trip.routeId,
                 latitude: vehicle.position.latitude,
                 longitude: vehicle.position.longitude,
-                speed: vehicle.position.hasSpeed() ? vehicle.position.speed : null,
+                speed:
+                    vehicle.position.hasSpeed() ? vehicle.position.speed : null,
                 timestamp: vehicle.timestamp.toInt(),
               ),
             );
           }
         }
-        print('Successfully parsed ${vehiclePositions.length} active vehicles.');
-        return vehiclePositions;
       } else {
-        throw Exception('Failed to load GTFS-Realtime data: Status code ${response.statusCode}');
+        // Log an error but don't stop the process, so if one feed is down, the other might still work.
+        print(
+            'Failed to load GTFS-Realtime data from ${response.request?.url}: Status code ${response.statusCode}');
       }
-    } catch (e) {
-      print('An error occurred in fetchVehiclePositions: $e');
-      rethrow;
     }
+
+    print(
+        'Successfully parsed ${allVehiclePositions.length} active vehicles from all sources.');
+    return allVehiclePositions;
   }
 }
